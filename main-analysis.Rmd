@@ -1,0 +1,117 @@
+---
+title: "Change of manager effect in football"
+author: "Pascal Albisser"
+date: "2023-02-17"
+output: html_document
+---
+
+```{r}
+library(dplyr)
+library(ggplot2)
+```
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## Load dataset
+
+Source: <https://www.kaggle.com/datasets/davidcariboo/player-scores>
+
+```{r loading-data}
+games <- read.csv("./data/kaggle_transfermarkt/games.csv") %>% 
+  mutate(date = as.Date(date))
+summary(games)
+```
+
+### Look at one team
+
+Take Athletic Bilbao for example:
+
+```{r}
+
+games %>% 
+  filter(home_club_id == 621 & competition_type == "domestic_league") %>% 
+  arrange(date) %>% 
+  select(c("competition_type", "date", "season", "round", "home_club_manager_name", "aggregate", "club_home_name", "club_away_name"))
+
+```
+
+So we need to get rid of the home/away distinction somehow to have a constant timeline. 
+- double the dataset
+- transform into team of interest vs. opponent
+
+```{r}
+
+games_home <- games %>% 
+  rename(team_id = home_club_id,
+         team_name = club_home_name,
+         team_goals = home_club_goals,
+         opponent_goals = away_club_goals,
+         team_position = home_club_position,
+         team_manager = home_club_manager_name,
+         ) %>% 
+  select(c("game_id", "team_name", "competition_type", "date", "season", "round", "team_id", "team_goals", "opponent_goals", "team_position", "team_manager", "stadium", "attendance", "referee", "url")) %>%
+  mutate(where = "Home") %>% 
+  arrange(team_id)
+
+games_away <- games %>% 
+  rename(team_id = away_club_id,
+         team_name = club_away_name,
+         team_goals = away_club_goals,
+         opponent_goals = home_club_goals,
+         team_position = away_club_position,
+         team_manager = away_club_manager_name,
+         ) %>% 
+  select(c("game_id", "team_name", "competition_type", "date", "season", "round", "team_id", "team_goals", "opponent_goals", "team_position", "team_manager", "stadium", "attendance", "referee", "url")) %>%
+  mutate(where = "Away") %>% 
+  arrange(team_id)
+
+df_games <- rbind(games_home, games_away)
+
+df_games <- df_games %>% 
+  arrange(game_id)
+
+head(df_games)
+
+```
+Check again pro team, we should now have a complete list of games without missing games in between.
+
+
+```{r}
+df_games %>% 
+  filter(team_id == 621) %>% 
+  arrange(date) 
+```
+
+## Construct variables
+
+Goal margin as first indicator of performance.
+
+```{r}
+df_games <- df_games %>% 
+  mutate(goal_margin = team_goals - opponent_goals)
+```
+
+```{r}
+df_games %>% 
+  filter(team_id == 621) %>% 
+  arrange(date) %>% 
+  mutate(team_manager_last_game = lag(team_manager)) %>% 
+  select(c("date", "team_manager", "team_manager_last_game"))
+
+# do this for every team
+```
+
+## Plot
+```{r}
+df_games %>% 
+  filter(team_id == 621 & season == 2012) %>% 
+  ggplot(mapping = aes(x = date, y = goal_margin, group = team_id)) +
+    geom_step() +
+    labs(title = "Goal Margin of Athletic Bilbao for Season 2012", y = "Scored - received goals")
+```
+
+
+ggplot()
