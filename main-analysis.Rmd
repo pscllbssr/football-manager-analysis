@@ -391,25 +391,34 @@ treatments_df %>%
 
 
 ```{r}
+
+summary(lm(position_delta ~ t, data = treatments_df %>% 
+  filter(t %in% c(-3, -1))))
+
 treatments_df %>% 
   filter(t %in% c(-3, -1)) %>% 
   ggplot(mapping = aes(x = t, y = position_delta)) +
     geom_point() +
-    labs(title = "Change of position, pre manager change", subtitle = "On average -1 position change.") +
-    geom_smooth(method = lm)
+    labs(title = "Change of position, pre manager change", subtitle = "On average -1 position change over 2 games.") +
+    geom_smooth(formula = y ~ x, method = lm)
 ```
 
 ### Look for similiar sequences, but without change (treatment)
+### Do the same procedure for treatment example to get same easy follow procedure
 
 ```{r}
 control_df <- spanish_league_ordered %>%
   group_by(team_id) %>% 
-  mutate(position_before = lag(team_position, 3L, order_by = team_id,)) %>% 
+  mutate(position_before = lag(team_position, 3L, order_by = team_id)) %>% 
+  mutate(position_after = lead(team_position, 3L, order_by = team_id)) %>% 
   mutate(position_delta = position_before - team_position)
 
-
 control_df %>% 
-  filter(position_delta == -1)
+  filter(position_delta == -1) %>% 
+  mutate(round_distance = abs(round_n - lead(round_n))) %>% 
+  filter(round_distance > 3) %>% 
+  select(team_id, round_n, team_position, position_before, position_after, position_delta)
+
 ```
 
 ### There is something wrong below, see validity functions
