@@ -5,7 +5,7 @@ date: "2023-02-17"
 output: html_document
 ---
 
-```{r}
+```{r, message = FALSE}
 library(dplyr)
 library(ggplot2)
 ```
@@ -22,7 +22,7 @@ Source: <https://www.kaggle.com/datasets/davidcariboo/player-scores>
 ```{r loading-data}
 games <- read.csv("./data/kaggle_transfermarkt/games.csv") %>% 
   mutate(date = as.Date(date))
-summary(games)
+str(games)
 ```
 
 ### Look at one team
@@ -50,9 +50,9 @@ games_home <- games %>%
          team_goals = home_club_goals,
          opponent_goals = away_club_goals,
          team_position = home_club_position,
-         team_manager = home_club_manager_name,
+         team_manager = home_club_manager_name
          ) %>% 
-  select(c("game_id", "team_name", "competition_type", "date", "season", "round", "team_id", "team_goals", "opponent_goals", "team_position", "team_manager", "stadium", "attendance", "referee", "url")) %>%
+  select(c("game_id", "team_name", "competition_type", "date", "competition_id", "season", "round", "team_id", "team_goals", "opponent_goals", "team_position", "team_manager", "stadium", "attendance", "referee", "url")) %>%
   mutate(where = "Home") %>% 
   arrange(team_id)
 
@@ -62,9 +62,9 @@ games_away <- games %>%
          team_goals = away_club_goals,
          opponent_goals = home_club_goals,
          team_position = away_club_position,
-         team_manager = away_club_manager_name,
+         team_manager = away_club_manager_name
          ) %>% 
-  select(c("game_id", "team_name", "competition_type", "date", "season", "round", "team_id", "team_goals", "opponent_goals", "team_position", "team_manager", "stadium", "attendance", "referee", "url")) %>%
+  select(c("game_id", "team_name", "competition_type", "date", "competition_id", "season", "round", "team_id", "team_goals", "opponent_goals", "team_position", "team_manager", "stadium", "attendance", "referee", "url")) %>%
   mutate(where = "Away") %>% 
   arrange(team_id)
 
@@ -73,17 +73,21 @@ df_games <- rbind(games_home, games_away)
 df_games <- df_games %>% 
   arrange(game_id)
 
+# Some 1314 observations have missing values for managers - drop these
+df_games <- df_games %>% 
+  filter(team_manager != "")
+
 head(df_games)
 
 ```
 Check again pro team, we should now have a complete list of games without missing games in between.
-
 
 ```{r}
 df_games %>% 
   filter(team_id == 621) %>% 
   arrange(date) 
 ```
+
 
 ## Construct variables
 
@@ -95,23 +99,371 @@ df_games <- df_games %>%
 ```
 
 ```{r}
-df_games %>% 
+one_team <- df_games %>% 
   filter(team_id == 621) %>% 
   arrange(date) %>% 
   mutate(team_manager_last_game = lag(team_manager)) %>% 
-  select(c("date", "team_manager", "team_manager_last_game"))
+  mutate(manager_change = team_manager_last_game != team_manager)
 
+one_team
 # do this for every team
 ```
 
-## Plot
 ```{r}
-df_games %>% 
-  filter(team_id == 621 & season == 2012) %>% 
-  ggplot(mapping = aes(x = date, y = goal_margin, group = team_id)) +
-    geom_step() +
-    labs(title = "Goal Margin of Athletic Bilbao for Season 2012", y = "Scored - received goals")
+one_team <- one_team %>% 
+  group_by(team_id, temp = rev(cumsum(rev(manager_change)))) %>%
+  mutate(games_since_last_change = row_number()) %>%
+  ungroup() %>% 
+  mutate(games_since_last_change = case_when(manager_change ~ 0, .default = games_since_last_change)) %>% 
+  arrange(desc(date)) %>% 
+  group_by(team_id, temp = rev(cumsum(rev(games_since_last_change == 0)))) %>%
+  mutate(games_to_next_change = row_number()) %>% 
+  ungroup() %>% 
+  arrange(date)
+  
+one_team
+```
+
+```{r}
+one_team <- one_team %>% 
+  group_by(team_id, temp = rev(cumsum(rev(manager_change)))) %>%
+  mutate(games_since_last_change = row_number()) %>%
+  ungroup() %>% 
+  mutate(games_since_last_change = case_when(manager_change ~ 0, .default = games_since_last_change)) %>% 
+  arrange(desc(date)) %>% 
+  group_by(team_id, temp = rev(cumsum(rev(games_since_last_change == 0)))) %>%
+  mutate(games_to_next_change = row_number()) %>% 
+  ungroup() %>% 
+  arrange(date)
+  
+one_team
+```
+
+```{r}
+one_team %>% 
+  filter(manager_change) %>% 
+  select(c(team_name, team_manager, team_manager_last_game, date))
 ```
 
 
-ggplot()
+## Plot
+```{r, echo = FALSE}
+one_team %>% 
+  filter(season %in% c(2012:2019)) %>% 
+  ggplot(mapping = aes(x = date, y = goal_margin, group = team_id)) +
+    geom_step() +
+    geom_point(data = . %>% filter(manager_change), mapping = aes(colour = manager_change)) +
+    geom_label(data = . %>% filter(manager_change), mapping = aes(label = team_manager, y = -6), hjust = 0, check_overlap = T) +
+    labs(title = "Goal Margin of Athletic Bilbao over time", y = "Scored - received goals") + 
+    guides(color=guide_legend(title="Manager Change"))
+```
+Add changing manager columns
+
+```{r}
+df_games <- df_games %>% 
+  arrange(date) %>% 
+  group_by(team_id) %>% 
+  mutate(team_manager_last_game = lag(team_manager)) %>% 
+  mutate(manager_change = team_manager_last_game != team_manager) %>% 
+  ungroup()
+
+df_games %>% 
+  filter(team_manager != team_manager_last_game)
+```
+
+Add counters to isolate before/after treatments
+
+```{r}
+
+df_games_m <- df_games %>% 
+  group_by(team_id) %>%
+  mutate(games_since_last_change = with(rle(manager_change), sequence(lengths)) * !manager_change) %>%
+  #mutate(games_to_next_change = with(inverse.rle(rle(manager_change)), sequence(lengths)) * !manager_change) %>%
+  ungroup() # %>% 
+  #mutate(games_since_last_change = case_when(manager_change ~ 0, .default = games_since_last_change)) # %>% 
+  #arrange(desc(date)) %>% 
+  #group_by(team_id, temp = rev(cumsum(rev(games_since_last_change == 0)))) %>%
+  #mutate(games_to_next_change = row_number()) %>% 
+  #ungroup() %>% 
+  #arrange(date)
+
+df_games_m <- df_games_m %>% 
+  arrange(desc(date)) %>% 
+  group_by(team_id) %>% 
+  mutate(games_to_change = with(rle(manager_change), sequence(lengths)) * !manager_change) %>%
+  ungroup() %>% 
+  arrange(date)
+
+# all changes to check
+df_games_m %>%
+  filter(team_id == 29) %>%
+  select(team_manager, team_manager_last_game, manager_change, games_since_last_change, games_to_change)
+```
+
+```{r}
+# df_games_m %>%  
+#   group_by(team_id) %>% 
+#   filter(manager_change)
+#   %>% 
+#   ggplot(mapping = aes(x = games_since_last_change)) +
+#     geom_histogram(binwidth = 10) +
+#     labs(title = "How long do managers stay at the same team?", subtitle = "Taking into account all games in this dataset.", x = "# games", y = "contracts")
+```
+
+```{r}
+TREATMENT_MARGIN <- 3
+
+df_around_treatment <- df_games_m %>% 
+  arrange(team_id, date) %>% 
+  filter(games_since_last_change <= TREATMENT_MARGIN | games_to_change <= TREATMENT_MARGIN) %>% 
+  select(date, team_manager, team_manager_last_game, manager_change, games_since_last_change, games_to_change) %>% 
+  ungroup()
+
+df_around_treatment
+  
+```
+
+make sure we look only at complete treatments (meaning enough matches before/after to compare)
+
+```{r}
+df_around_treatment %>% 
+  filter(games_to_change <= TREATMENT_MARGIN) %>% 
+  mutate(treatment_group = cumsum(as.numeric(manager_change))) %>% 
+  select(date, team_manager, team_manager_last_game, manager_change, games_since_last_change, games_to_change, treatment_group) %>% 
+  group_by(treatment_group) %>% 
+  mutate(treatment_grouper = paste(last(team_manager_last_game), last(team_manager), sep = " - ")) %>% 
+  ungroup()
+```
+
+```{r}
+df_around_treatment %>% 
+  filter(games_since_last_change <= TREATMENT_MARGIN) %>% 
+  mutate(treatment_group = cumsum(as.numeric(manager_change))) %>% 
+  select(date, team_manager, team_manager_last_game, manager_change, games_since_last_change, games_to_change, treatment_group) %>% 
+  group_by(treatment_group) %>% 
+  mutate(treatment_group_s  = paste(first(team_manager_last_game), first(team_manager), sep = " - ")) %>% 
+  ungroup()
+```
+
+# completely other approach
+
+```{r}
+spanish_league <- df_games %>% 
+  filter(competition_id == "ES1") %>% 
+  mutate(round_n = as.numeric(sub(" .*", "", round))) %>% 
+  group_by(team_id) %>%
+  mutate(games_since_last_change = with(rle(manager_change), sequence(lengths)) * !manager_change) %>%
+  ungroup() %>% 
+  arrange(desc(date)) %>% 
+  group_by(team_id) %>% 
+  mutate(games_to_change = with(rle(manager_change), sequence(lengths)) * !manager_change) %>%
+  ungroup() %>% 
+  arrange(date)
+
+
+spanish_league %>% 
+  arrange(team_id, date) %>% 
+  #select(date, team_id, team_manager, team_manager_last_game, games_since_last_change, games_to_change, round_n) %>% 
+  ggplot(mapping = aes(y = factor(team_name), x = date)) +
+    geom_point(shape = "|") +
+    geom_point(data = . %>% filter(manager_change), shape = 18, colour = "red", size = 3) +
+    labs(title = "Games & manager changes in La Liga per team", subtitle = "Seasons 2011 - 2022")
+  
+# ---> since/last only for league
+```
+```{r}
+
+spanish_league_ordered <- spanish_league %>% 
+  arrange(team_id, date)
+  
+spanish_league_ordered %>%
+  group_by(team_id) %>% 
+  mutate(treatment = paste(team_manager, "->", team_manager_last_game)) %>% 
+  mutate(before_treatment = lag(manager_change, 5L)) %>%
+  mutate(treatment = lag(treatment, 5L)) %>% 
+  ungroup() %>% 
+  filter(manager_change | before_treatment) %>% 
+  select(date, team_id, team_manager, team_manager_last_game, before_treatment, manager_change, round_n, treatment)
+  
+```
+
+
+```{r}
+
+TREATMENT_MARGIN = 3
+
+# get treatment indices
+spanish_league_treatment_idx <- which(spanish_league_ordered$manager_change)
+
+# which treatment has a corresponding before treatment?
+cond1 <- which(spanish_league_ordered[spanish_league_treatment_idx-TREATMENT_MARGIN,]$games_to_change == TREATMENT_MARGIN)
+
+# which treatment has a corresponding after treatment?
+cond2 <- which(spanish_league_ordered[spanish_league_treatment_idx+TREATMENT_MARGIN,]$games_since_last_change == TREATMENT_MARGIN)
+
+# during the season
+cond3 <- which(spanish_league_ordered[spanish_league_treatment_idx,]$round_n >= TREATMENT_MARGIN)
+cond4 <- which(spanish_league_ordered[spanish_league_treatment_idx,]$round_n <= 38 - TREATMENT_MARGIN)
+
+# get the intersection of ids fullfilling all conditions
+spanish_league_treatment_idx_subset <- spanish_league_treatment_idx[intersect(cond1, intersect(cond2, intersect(cond3, cond4)))]
+
+true_real_treatments <- spanish_league_ordered[spanish_league_treatment_idx_subset,] %>% 
+  mutate(t = 0)
+before_treatment <- spanish_league_ordered[spanish_league_treatment_idx_subset-TREATMENT_MARGIN,] %>% 
+  mutate(t = -TREATMENT_MARGIN)
+just_before_treatment <- spanish_league_ordered[spanish_league_treatment_idx_subset-1,] %>% 
+  mutate(t = -1)
+after_treatment <- spanish_league_ordered[spanish_league_treatment_idx_subset+TREATMENT_MARGIN,] %>% 
+  mutate(t = TREATMENT_MARGIN)
+
+treatments_df <- rbind(true_real_treatments, before_treatment, after_treatment, just_before_treatment) %>% 
+  arrange(team_id, date)
+
+treatments_df %>% 
+  group_by(team_id) %>% 
+  summarise(count = n()) %>% 
+  mutate(validity = count %% 4 == 0)
+
+# treatments_df %>%
+#   ggplot(mapping = aes(x = date, y = team_position, colour = factor(t))) +
+#     geom_point() +
+#     scale_y_reverse()
+
+```
+```{r}
+treatments_df <- treatments_df %>% 
+  mutate(treatment_id = (row_number()-1) %/% 4)
+```
+
+
+```{r, warning=FALSE, message=FALSE}
+
+df_games_m %>% 
+  filter(competition_id == "ES1") %>% 
+  mutate(round_n = as.numeric(sub(" .*", "", round)),
+         team_position = ifelse(games_since_last_change <= 5 | games_to_change <= 5, team_position, NA)) %>% 
+  filter(round_n > 5) %>% 
+  arrange(team_id, date) %>% 
+  ggplot(mapping = aes(x = date, y = team_position, group = team_id, colour = team_name, fill = factor(manager_change))) +
+    geom_point(alpha = 0.5, shape = 23) +
+    geom_line(alpha = 0.5) +
+    scale_y_reverse() +
+    guides(colour = FALSE, shape = FALSE, fill = FALSE) +
+    geom_text(data = . %>% filter(date == max(date)), mapping = aes(label = team_name), hjust = 0, nudge_x = 5) +
+    scale_x_date(expand = expansion(mult = c(0.01, 0.2))) +
+    scale_fill_manual(values = c("white", "black", "transparent")) +
+    facet_wrap(~season, scales = "free_x")
+  
+```
+
+```{r}
+treatments_df %>% 
+  ggplot(mapping = aes(x = date, y = team_position, group = factor(treatment_id), colour = team_name)) +
+    geom_point() +
+    scale_y_reverse() +
+    geom_line() +
+    facet_wrap(~treatment_id, scales = "free_x")
+```
+
+```{r}
+
+treatments_df <- treatments_df %>% 
+  group_by(treatment_id) %>%
+  mutate(position_delta = lag(team_position) - team_position) %>% 
+  ungroup() %>% 
+  mutate(position_delta = ifelse(t == -3, 0, position_delta))
+
+treatments_df
+```
+
+
+
+
+```{r}
+treatments_df %>% 
+  ggplot(mapping = aes(x = t, y = position_delta, group = factor(treatment_id), colour = team_name)) +
+    geom_point() +
+    geom_line() +
+    labs(title = "Change of position, pre and post manager change")
+```
+
+
+
+```{r}
+treatments_df %>% 
+  filter(t %in% c(-3, -1)) %>% 
+  ggplot(mapping = aes(x = t, y = position_delta)) +
+    geom_point() +
+    labs(title = "Change of position, pre manager change", subtitle = "On average -1 position change.") +
+    geom_smooth(method = lm)
+```
+
+### Look for similiar sequences, but without change (treatment)
+
+```{r}
+control_df <- spanish_league_ordered %>%
+  group_by(team_id) %>% 
+  mutate(position_before = lag(team_position, 3L, order_by = team_id,)) %>% 
+  mutate(position_delta = position_before - team_position)
+
+
+control_df %>% 
+  filter(position_delta == -1)
+```
+
+### There is something wrong below, see validity functions
+
+```{r}
+
+TREATMENT_MARGIN = 3
+
+# get control indices
+control_idx <- which(control_df$position_delta == -1)
+
+# during the season
+cond1 <- which(control_df[control_idx,]$round_n >= TREATMENT_MARGIN)
+cond2 <- which(control_df[control_idx,]$round_n <= 38 - TREATMENT_MARGIN)
+
+# get the intersection of ids fullfilling all conditions
+spanish_league_control_idx_subset <- control_idx[intersect(cond1, cond2)]
+
+true_real_controls <- control_df[spanish_league_control_idx_subset,] %>% 
+  mutate(t = 0)
+before_control <- control_df[spanish_league_control_idx_subset-TREATMENT_MARGIN,] %>% 
+  mutate(t = -TREATMENT_MARGIN)
+just_before_control <- control_df[spanish_league_control_idx_subset-1,] %>% 
+  mutate(t = -1)
+after_control <- control_df[spanish_league_control_idx_subset+TREATMENT_MARGIN,] %>% 
+  mutate(t = TREATMENT_MARGIN)
+
+controls_df <- rbind(true_real_controls, before_control, just_before_control, after_control) %>% 
+  arrange(team_id, date)
+
+controls_df %>% 
+  group_by(team_id) %>% 
+  summarise(count = n()) %>% 
+  mutate(validity = count %% 4 == 0)
+  
+```
+
+```{r}
+controls_df <- controls_df %>% 
+  mutate(treatment_id = (row_number()-1) %/% 4)
+
+controls_df <- controls_df %>% 
+  group_by(treatment_id) %>%
+  mutate(position_delta = lag(team_position) - team_position) %>% 
+  ungroup() %>% 
+  mutate(position_delta = ifelse(t == -3, 0, position_delta))
+```
+
+
+```{r}
+controls_df %>%   
+  ggplot(mapping = aes(x = t, y = position_delta, group = factor(treatment_id), colour = team_name)) +
+    geom_point() +
+    geom_line() +
+    labs(title = "Change of position, pre and post manager change")
+```
+
