@@ -14,16 +14,21 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(fixest)
+library(kableExtra)
 ```
 
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
+options(knitr.table.format = function() {
+  if (knitr::is_latex_output())
+    "latex" else "pipe"
+})
 ```
 
 # Introduction
 
-Whenever a football team performs badly oftentimes the first measure taken is the sacking of the teams manager. In the swiss football league the FC Sion and his president Christian Constantin are known for their rigorous sacking of managers for not delivering the desired results. Recently (27.02.2023) they suspended their manager Fabio Celestini after six games without win as [blick.ch](https://www.blick.ch/sport/fussball/superleague/celestini-beurlaubt-cc-uebernimmt-beim-fc-sion-brennts-mal-wieder-lichterloh-id18355581.html) reported.
+Whenever a football team performs badly oftentimes the first measure taken is the sacking of the teams manager. In the swiss football league the FC Sion and his president Christian Constantin are known for their rigorous sacking of managers for not delivering the desired results. Recently (03.03.2023) they suspended their manager Fabio Celestini after six games without win as [srf.ch](https://www.srf.ch/sport/fussball/super-league/aus-nach-nur-6-pflichtspielen-sion-entlaesst-celestini-definitiv) and others reported.
 
 I personally feel this is not a very effective measure. My impression is that it may have an effect in the first one or two games but in the long turn it does not. So why not have a look at some data to scrutinize if changing the manager of a bad performing team has an effect on its position in the league?
 
@@ -78,7 +83,7 @@ df_games <- df_games %>%
 df_games <- df_games %>% 
   filter(team_manager != "")
 
-head(df_games)
+str(df_games)
 
 ```
 
@@ -95,8 +100,9 @@ df_games <- df_games %>%
   mutate(manager_change = team_manager_last_game != team_manager) %>% 
   ungroup()
 
-df_games %>% 
-  filter(team_manager != team_manager_last_game)
+kable(head(df_games %>% 
+  filter(team_manager != team_manager_last_game) %>% 
+  select(team_name, team_manager, team_manager_last_game, manager_change)))
 ```
 
 ## Take spanish league as subset
@@ -114,7 +120,7 @@ spanish_league <- df_games %>%
   group_by(team_id) %>% 
   mutate(games_to_change = with(rle(manager_change), sequence(lengths)) * !manager_change) %>%
   ungroup() %>% 
-  arrange(date)
+  arrange(team_id, date)
 ```
 
 ## Overview
@@ -132,33 +138,32 @@ spanish_league %>%
     labs(title = "Games & manager changes in La Liga per team", subtitle = "Seasons 2011 - 2022", x = "", y = "team")
   
 ```
-
-This plot already shows one particular difficulty of this analysis: The treatments happen at different points in time. So 
+As every season every team starts from zero it takes some time until its position is more or less stable. Or put differently: until the rank is a solid representation of the teams ability. The next line chart depicts that apart from round 5 there are on average only changes of about 2 ranks. Therefore we exclude the first 5 rounds from our analysis.
 
 ```{r}
-
-spanish_league_ordered <- spanish_league %>% 
-  arrange(team_id, date)
-  
-spanish_league_ordered %>%
+spanish_league %>% 
   group_by(team_id) %>% 
-  mutate(treatment = paste(team_manager, "->", team_manager_last_game)) %>% 
-  mutate(before_treatment = lag(manager_change, 5L)) %>%
-  mutate(treatment = lag(treatment, 5L)) %>% 
-  ungroup() %>% 
-  filter(manager_change | before_treatment) %>% 
-  select(date, team_id, team_manager, team_manager_last_game, before_treatment, manager_change, round_n, treatment)
-  
+  mutate(position_delta = abs(lag(team_position) - team_position)) %>% 
+  select(team_id, round_n, season, team_position, position_delta) %>% 
+  group_by(round_n) %>% 
+  summarise(delta = mean(position_delta, na.rm = TRUE)) %>% 
+  ggplot(mapping = aes(y = delta, x = round_n)) +
+    geom_line() +
+    geom_vline(xintercept = 5) +
+    labs(title = "Decline in position changes", y = "average position change", x = "round of season")
+
 ```
 
-# The Difference-in-Differences approach
+# The Difference-in-Differences (DID) approach
 
-Look for similiar sequences, but without change (treatment)
-Do the same procedure for treatment example to get same easy follow procedure
+So far we can think of two main explanations for the possible changes to a teams performance: Time passing by and beeing treated or not, that is have its manager replaced or not. Therefore I am going to build a control group consisting of teams which did not replace their coach and a treatment group which did. This control group then allows me to estimate the changes which would have happened to the treatment group without treatment and then estimate the difference to the actual change. This difference is the effect of the treatment.  
 
+## Prepare treatment group
 
-```{r}
-df_treatments <- spanish_league_ordered %>% 
+To measure if the treatment has an effect I take the rank 3 games before the treatment, as well as right at the time of treatment and 3 games after the treatment as indicators. As I only want to scrutinize manager changes due to bad results I filter on negative rank changes before the treatment. In the end the control groups consists of 97 treatments.
+
+```{r, echo }
+df_treatments <- spanish_league %>% 
   group_by(team_id) %>% 
   mutate(position_start = lag(team_position, 4L, order_by = team_id)) %>% 
   mutate(position_before = lag(team_position, 1L, order_by = team_id)) %>% 
@@ -167,9 +172,9 @@ df_treatments <- spanish_league_ordered %>%
   mutate(position_before_rel = position_start - position_before) %>% 
   mutate(position_after_rel = position_start - position_after) %>% 
   ungroup() %>% 
-  filter(manager_change) %>% 
-  select(game_id, team_id, date, position_start, position_before, position_after, round_n, season, team_name, team_manager, team_manager_last_game, position_start_rel, position_before_rel, position_after_rel) %>% 
-  filter(position_start <= position_before) %>%  # only treatments with decrease in position before 
+  filter(manager_change & round_n > 5) %>% 
+  select(game_id, team_id, date, round_n, season, team_name, team_manager, team_manager_last_game, position_start_rel, position_before_rel, position_after_rel) %>% 
+  filter(position_before_rel < 0) %>%  # only treatments with decrease in position before 
   mutate(group_id = row_number())
 
 df_treatments <- df_treatments %>% 
@@ -178,28 +183,33 @@ df_treatments <- df_treatments %>%
     names_to = "t",
     values_to = "position"
   ) %>% 
-  mutate(t = factor(t, levels = c("position_start", "position_before", "position_after", "position_start_rel", "position_before_rel", "position_after_rel")))
+  mutate(t = factor(t, levels = c("position_start_rel", "position_before_rel", "position_after_rel"))) %>% 
+  arrange(team_id, date)
 
-df_treatments
+length(unique(df_treatments$group_id))
   
 ```
 
 ```{r, warning = FALSE}
 df_treatments %>%   
   filter(grepl('_rel', t)) %>% 
-  ggplot(mapping = aes(x = t, y = position, group = group_id, colour = team_name)) +
-    geom_point() +
-    geom_line() +
-    geom_smooth(formula = y ~ x, method = "loess", mapping = aes(group = NA)) +
-    labs(title = "Change of position, pre and post manager change")
+  ggplot(mapping = aes(x = t, y = position, group = group_id, colour = "treatment")) +
+    geom_point(alpha = 0.1) +
+    geom_line(alpha = 0.3) +
+    geom_smooth(formula = y ~ x, method = "loess", mapping = aes(group = NA, colour = "loess"), linewidth = 1) +
+    labs(title = "Change of position, pre and post manager change") +
+    scale_colour_manual(name="", values=c("blue", "orange"))
+
 ```
+Just looking at the treatment group the manager change seems to have at least a small positive effect.
 
+## Prepare control group
 
-
+As for the control group I want to find teams also decreasing in rank but then decide not to sack their manager. Additionally I have to make sure the time periods do not overlap otherwise would take into account the same period twice. 
 
 ```{r}
 
-df_control <- spanish_league_ordered %>%
+df_control <- spanish_league %>%
   group_by(team_id) %>% 
   mutate(position_start = lag(team_position, 4L, order_by = team_id)) %>% 
   mutate(position_before = lag(team_position, 1L, order_by = team_id)) %>% 
@@ -207,62 +217,58 @@ df_control <- spanish_league_ordered %>%
   mutate(position_start_rel = 0) %>% 
   mutate(position_before_rel = position_start - position_before) %>% 
   mutate(position_after_rel = position_start - position_after) %>% 
-  mutate(same_manager = lag(team_manager, 4L, order_by = team_id) == team_manager & team_manager == lead(team_manager, 2L, order_by = team_id)) #--> need to check if same manager in period
+  mutate(same_manager = lag(team_manager, 4L, order_by = team_id) == team_manager & team_manager == lead(team_manager, 2L, order_by = team_id)) %>%  #--> need to check if same manager in period
+  ungroup() 
 
 df_control <- df_control %>%
-  filter(position_before_rel <= 0) %>%
+  filter(position_before_rel < 0) %>%
   filter(same_manager) %>%
   mutate(round_distance = abs(round_n - lead(round_n))) %>%
   filter(round_distance > 3) %>%
-  filter(round_n > 5 & round_n < 34) %>%
-  select(game_id, team_id, date, position_start, position_before, position_after, round_n, season, team_name, team_manager, team_manager_last_game, position_start_rel, position_before_rel, position_after_rel) %>%
+  filter(round_n > 5) %>%
+  select(game_id, team_id, date, round_n, season, team_name, team_manager, team_manager_last_game, position_start_rel, position_before_rel, position_after_rel) %>%
   mutate(group_id = row_number()) %>%
   pivot_longer(
     cols = starts_with("position_"),
     names_to = "t",
     values_to = "position"
   ) %>%
-  mutate(t = factor(t, levels = c("position_start", "position_before", "position_after", "position_start_rel", "position_before_rel", "position_after_rel")))
+  mutate(t = factor(t, levels = c("position_start_rel", "position_before_rel", "position_after_rel")))
 
-df_control
+print(length(unique(df_control$group_id)))
 
 ```
 
 
 ```{r, warning = FALSE}
+
 df_control %>%   
   filter(grepl('_rel', t)) %>% 
-  ggplot(mapping = aes(x = t, y = position, group = group_id, colour = team_name)) +
-    geom_point() +
-    geom_line() +
-    geom_smooth(formula = y ~ x, method = "loess", mapping = aes(group = NA)) +
-    labs(title = "Change of position, pre and post manager change")
+  ggplot(mapping = aes(x = t, y = position, group = group_id, colour = "treatment")) +
+    geom_point(alpha = 0.1) +
+    geom_line(alpha = 0.3) +
+    geom_smooth(formula = y ~ x, method = "loess", mapping = aes(group = NA, colour = "loess"), linewidth = 1) +
+    labs(title = "Change of position in control group") +
+    scale_colour_manual(name="", values=c("blue", "orange"))
+
+
 ```
+The chart indicates that not changing the manager leads to even worse results. So far this speaks in favour of replacing the unsuccessful coach with a new one.
 
-marriage
+## Checking the parallel trend assumption
 
-```{r}
-names(df_control)
-```
+In order for the DID-approach to be plausible and make sure the change in the treatment group is due to a causal effect it is important to check the parallel trends assumption. I have to show that without treatment both groups would have gone the same way. For the treatment this is a counter factual - I can not actually observe it because it never happened. And therefore I can not mathematically prove it.
 
-```{r}
-names(df_treatments)
-```
+But if the prior trends are somewhat similar this is more likely that both groups would have further decreased in ranks. By finding control observations based on similarity to the treatment observations I already can be quite sure prior trends are trending the same way. The following plot confirms this.
 
-```{r}
+```{r, warning = FALSE}
+
 df_control$treatment <- 0
 df_treatments$treatment <- 1
 
 df_did <- rbind(df_control, df_treatments) %>% 
   filter(grepl('_rel', t)) %>% 
   mutate(treatment = factor(treatment, levels = c(0,1), labels = c('Control', 'Treatment')))
-df_did
-```
-
-## Checking the linear trend assumption
-
-```{r}
-
 
 df_did %>% 
   group_by(t, treatment) %>% 
@@ -275,36 +281,63 @@ df_did %>%
       labs(title = "Trend comparison of control and treatment group", x = "Time", y = "Position (Relative)")
 ```
 
-## Calculating the ATET using simple means
+In addition most of the circumstances stay constant over the whole period for both groups. All games always start from 0-0, the games are held on the same pitches and even the players are mostly constant due to the fact that transfers are only allowed twice a year between seasons. So we have reason to believe that the untreated group was not object of sudden changes around the time of treatment and both groups are similar. 
+
+## Formula
+
+We can express our assumption in the following formula:
+
+\begin{align*}
+Y = \beta_{0} + \beta_{1}ManagerChangedGroup + \beta_{2}AfterManagerChange + \\ 
+\beta_{3}ManagerChangedGroup x AfterManagerChange + \varepsilon
+\end{align*}
+
+The coefficient <math xmlns="http://www.w3.org/1998/Math/MathML">
+  <msub>
+    <mi>&#x3B2;</mi>
+    <mn>3</mn>
+  </msub>
+</math> of the interaction term <math xmlns='http://www.w3.org/1998/Math/MathML'>
+ <mrow>
+  <mi>AfterManagerChange</mi>
+  <mo>&#8290;</mo>
+  <mi>x</mi>
+  <mo>&#8290;</mo>
+  <mi>ManagerChangedGroup</mi>
+ </mrow>
+</math> tells us the difference of the <math xmlns='http://www.w3.org/1998/Math/MathML'>
+ <mi>ManagerChangedGroup</mi>
+</math> effect before and after the treatment - the difference-in-differences we are looking for.
+
+## Average treatment effect
+
+The explanation of DID above already mentioned I can subtract the change in the untreated group from the change in the treated group to get the effect of changing manager on bad performing teams:
 
 ```{r}
 
 df_did$post <- as.numeric(df_did$t == "position_after_rel")
-
 
 (mean(df_did[df_did$treatment=="Treatment" & df_did$post==1,]$position)-
 mean(df_did$position[df_did$treatment=="Control" & df_did$post==1]))-
 (mean(df_did$position[df_did$treatment=="Treatment" & df_did$post==0])-
 mean(df_did$position[df_did$treatment=="Control" & df_did$post==0]))
 ```
-The treatment group seems to be one position weaker than control. 
 
+This indicates that teams changing their manager on average occupy a -0.78 lower rank after 3 games than teams that do not.
 
+Now I want to see if the effect is significant. But first let me formulate my hypotheses:
 
-# Descriptive statistics?
+- H_{0}: the replacement of a manager has no effect on the performance of a football team
+- H_{A}: the replacement of a manager has an effect on the performance of a football team
 
-```{r}
-did_baseline <- lm(position~post*treatment, data = df_did)
-summary(did_baseline)
-```
-
+To estimate the treatment effect I use the `feols`-command from the `fixest`-package. This also allows me to add a fixed effect for team and therefore control for all things that are constant per team over years. For example I assume that teams like _FC Barcelona_ and _Real Madrid_ constantly have a larger budget and than other teams and therefore probably more means to influence the performance of the team.  
 
 ```{r}
-did_fe_teams <- feols(fml = position~post*treatment | team_id , data = df_did)
-summary(did_fe_teams)
+did_fe_teams <- feols(fml = position ~ post * treatment | team_id, data = df_did)
+etable(did_fe_teams)
 ```
-
-# Results
 
 # Conclusion
+
+very rough measure, maybe implement true skill or more other more granular methods. On the other hands maybe bit harsh to look only at position, but its what counts
 
