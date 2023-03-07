@@ -2,11 +2,11 @@
 title: "Change of manager effect in football"
 author: "Pascal Albisser"
 date: "2023-03-06"
-output: 
+output:
   html_document:
-    toc: true
-    toc_float: true
-    code_folding: "hide"
+    toc: yes
+    toc_float: yes
+    code_folding: hide
 ---
 
 ```{r, message = FALSE, echo = FALSE}
@@ -28,9 +28,9 @@ options(knitr.table.format = function() {
 
 # Introduction
 
-Whenever a football team performs badly oftentimes the first measure taken is the sacking of the teams manager. In the swiss football league the FC Sion and his president Christian Constantin are known for their rigorous sacking of managers for not delivering the desired results. Recently (03.03.2023) they suspended their manager Fabio Celestini after six games without win as [srf.ch](https://www.srf.ch/sport/fussball/super-league/aus-nach-nur-6-pflichtspielen-sion-entlaesst-celestini-definitiv) and others reported.
+Whenever a football team performs badly oftentimes the first measure taken is the sacking of the teams manager. In the swiss football league for example the FC Sion and his president Christian Constantin are known for their rigorous sacking of managers for not delivering the desired results. Recently (03.03.2023) they suspended their manager Fabio Celestini after six games without win as [srf.ch](https://www.srf.ch/sport/fussball/super-league/aus-nach-nur-6-pflichtspielen-sion-entlaesst-celestini-definitiv) and others reported.
 
-I personally feel this is not a very effective measure. My impression is that it may have an effect in the first one or two games but in the long turn it does not. So why not have a look at some data to scrutinize if changing the manager of a bad performing team has an effect on its position in the league?
+I personally feel this may be common but not a very effective measure. Some teams get better afterwards, some not. Others get better without changing their manager. So why not have a look at some data to scrutinize if changing the manager of a bad performing team has an effect on its position in the league?
 
 # Data Source
 
@@ -43,7 +43,7 @@ summary(games)
 ```
 ## Preprocessing
 
-Although the data contain all necessary values it is of inconvenient form four my analysis. I want to have one team per row for example. But the dataset has two in each, namely the home and away team per match. This requires some preprocessing of the data.
+Although the data contain all necessary values it is of inconvenient form for my analysis. I want to have one team per row for example. But the dataset has two in each, namely the home and away team per match. This requires some preprocessing of the data.
 
 ```{r}
 
@@ -207,7 +207,7 @@ Just looking at the treatment group itself the manager change seems to have at l
 
 ## Prepare control group
 
-As for the control group I want to find teams also decreasing in rank but then decide not to sack their manager. Additionally I have to make sure the time periods do not overlap for the same otherwise would take into account the same period twice. 
+As for the control group I want to find teams also decreasing in rank but then decide not to sack their manager. Additionally I also make sure time periods per team do not overlap.
 
 ```{r}
 
